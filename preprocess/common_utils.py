@@ -6,7 +6,17 @@ from nltk.corpus import stopwords
 from itertools import product, combinations
 from utils.constants import MAX_RELATIVE_DIST
 
+import pdb
+
 def is_number(s):
+    # ## YS add
+    # try:
+    #     s.encode('ascii')
+    # except UnicodeEncodeError:
+    #     print('* UnicodeEncodeError:', s)
+    #     return False
+    # except Exception as e:
+    #     raise e
     try:
         float(s)
         return True
@@ -128,6 +138,11 @@ class Preprocessor():
         """ Tokenize, lemmatize, lowercase question"""
         # stanza tokenize, lemmatize and POS tag
         question = ' '.join(quote_normalization(entry['question_toks']))
+        # ## YS debug
+        # if verbose:   
+        #     print('* preprocess_question()')
+        #     print('question:', question)
+        #     print()
         doc = self.nlp(question)
         raw_toks = [w.text.lower() for s in doc.sentences for w in s.words]
         toks = [w.lemma.lower() for s in doc.sentences for w in s.words]
@@ -153,7 +168,14 @@ class Preprocessor():
         entry['relations'] = q_mat.tolist()
 
         if verbose:
+            ## YS debug
+            # try:
+            #     print('Question:', entry['question'])
+            # except Exception as e:
+            #     # pdb.set_trace()   # causing segfault...?
+            #     print('Question:', ''.join([c for c in entry['question'] if ord(c) < 128]), '[ERROR CHARS REMOVED]')
             print('Question:', entry['question'])
+            print('Normalized question:', question)     ## YS
             print('Tokenized:', ' '.join(entry['raw_question_toks']))
             print('Lemmatized:', ' '.join(entry['processed_question_toks']))
             print('Pos tags:', ' '.join(entry['pos_tags']), '\n')

@@ -67,7 +67,9 @@ if __name__ == '__main__':
         print('Databases preprocessing costs %.4fs .' % (time.time() - start_time))
     else:
         tables = pickle.load(open(args.table_path, 'rb'))
-    dataset = json.load(open(args.dataset_path, 'r'))
+    # dataset = json.load(open(args.dataset_path, 'r'))
+    with open(args.dataset_path, 'r') as f:
+        dataset = json.load(f)
     start_time = time.time()
     dataset = process_dataset(processor, dataset, tables, args.output_path, args.skip_large, verbose=args.verbose)
     print('Dataset preprocessing costs %.4fs .' % (time.time() - start_time))

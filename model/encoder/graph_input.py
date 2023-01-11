@@ -5,6 +5,8 @@ import torch.nn as nn
 from model.model_utils import rnn_wrapper, lens2mask, PoolingFunction
 from transformers import AutoModel, AutoConfig
 
+import pdb
+
 class GraphInputLayer(nn.Module):
 
     def __init__(self, embed_size, hidden_size, word_vocab, dropout=0.2, fix_grad_idx=60, schema_aggregation='head+tail'):
@@ -82,22 +84,33 @@ class SubwordAggregation(nn.Module):
         tables: bsize x max_table_word_len x hidden_size
         columns: bsize x max_column_word_len x hidden_size
         """
+        # inputs: (bsize, all_subwords_len, hidden_size); (20, 87, 1024)
+        pdb.set_trace()    # YS inspect
+        # old_questions: (batch_q_subwords * hidden_size); (274432 = 268 * 1024)
         old_questions, old_tables, old_columns = inputs.masked_select(batch.question_mask_plm.unsqueeze(-1)), \
             inputs.masked_select(batch.table_mask_plm.unsqueeze(-1)), inputs.masked_select(batch.column_mask_plm.unsqueeze(-1))
+        # question_subword_lens: (batch_q_words,); (266,)  The num of subwords for each word
+        # questions: (batch_q_words, w_max_subwords, hidden_size); (266, 2, 1024)
         questions = old_questions.new_zeros(batch.question_subword_lens.size(0), batch.max_question_subword_len, self.hidden_size)
+        # question_subword_mask: (batch_q_words, w_max_subwords); (266, 2)  The mask of valid subwords for each word
+        # questions: (batch_q_words, w_max_subwords, hidden_size); (266, 2, 1024)
         questions = questions.masked_scatter_(batch.question_subword_mask.unsqueeze(-1), old_questions)
         tables = old_tables.new_zeros(batch.table_subword_lens.size(0), batch.max_table_subword_len, self.hidden_size)
         tables = tables.masked_scatter_(batch.table_subword_mask.unsqueeze(-1), old_tables)
         columns = old_columns.new_zeros(batch.column_subword_lens.size(0), batch.max_column_subword_len, self.hidden_size)
         columns = columns.masked_scatter_(batch.column_subword_mask.unsqueeze(-1), old_columns)
 
+        # questions: (batch_q_words, hidden_size); (266, 1024)
         questions = self.aggregation(questions, mask=batch.question_subword_mask)
         tables = self.aggregation(tables, mask=batch.table_subword_mask)
         columns = self.aggregation(columns, mask=batch.column_subword_mask)
 
+        # new_questions: (bsize, q_words_len, hidden_size); (20, 19, 1024)
         new_questions, new_tables, new_columns = questions.new_zeros(len(batch), batch.max_question_len, self.hidden_size),\
             tables.new_zeros(batch.table_word_mask.size(0), batch.max_table_word_len, self.hidden_size), \
                 columns.new_zeros(batch.column_word_mask.size(0), batch.max_column_word_len, self.hidden_size)
+        # question_mask: (bsize, q_words_len); (20, 19)  The mask of valid words for each question
+        # new_questions: (bsize, q_words_len, hidden_size); (20, 19, 1024)
         new_questions = new_questions.masked_scatter_(batch.question_mask.unsqueeze(-1), questions)
         new_tables = new_tables.masked_scatter_(batch.table_word_mask.unsqueeze(-1), tables)
         new_columns = new_columns.masked_scatter_(batch.column_word_mask.unsqueeze(-1), columns)
