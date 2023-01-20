@@ -6,17 +6,21 @@ from nltk.corpus import stopwords
 from itertools import product, combinations
 from utils.constants import MAX_RELATIVE_DIST
 
+from sdr_analysis.helpers.general_helpers import _wikisql_db_id_to_table_name
+
 import pdb
 
 def is_number(s):
-    # ## YS add
-    # try:
-    #     s.encode('ascii')
-    # except UnicodeEncodeError:
-    #     print('* UnicodeEncodeError:', s)
-    #     return False
-    # except Exception as e:
-    #     raise e
+    ## YS add
+    try:
+        s.encode('ascii')
+    except UnicodeEncodeError:
+        # non-ascii string
+        # print('* UnicodeEncodeError:', s)
+        return False
+    except Exception as e:
+        raise e
+
     try:
         float(s)
         return True
@@ -341,6 +345,189 @@ class Preprocessor():
                                 column_matched_pairs['value'].append(str((column_names[i], i, word, j, j + 1)))
                             break
             conn.close()
+
+        # two symmetric schema linking matrix: q_num x (t_num + c_num), (t_num + c_num) x q_num
+        q_col_mat[:, 0] = 'question-*-generic'
+        col_q_mat[0] = '*-question-generic'
+        q_schema = np.concatenate([q_tab_mat, q_col_mat], axis=1)
+        schema_q = np.concatenate([tab_q_mat, col_q_mat], axis=0)
+        entry['schema_linking'] = (q_schema.tolist(), schema_q.tolist())
+
+        if verbose:
+            print('Question:', ' '.join(question_toks))
+            print('Table matched: (table name, column id, question span, start id, end id)')
+            print('Exact match:', ', '.join(table_matched_pairs['exact']) if table_matched_pairs['exact'] else 'empty')
+            print('Partial match:', ', '.join(table_matched_pairs['partial']) if table_matched_pairs['partial'] else 'empty')
+            print('Column matched: (column name, column id, question span, start id, end id)')
+            print('Exact match:', ', '.join(column_matched_pairs['exact']) if column_matched_pairs['exact'] else 'empty')
+            print('Partial match:', ', '.join(column_matched_pairs['partial']) if column_matched_pairs['partial'] else 'empty')
+            print('Value match:', ', '.join(column_matched_pairs['value']) if column_matched_pairs['value'] else 'empty', '\n')
+        return entry
+
+
+class Preprocessor_Wikisql(Preprocessor):
+    # def __init__(self, db_dir='data/database', db_content=True):
+    #     super(Preprocessor, self).__init__()
+    #     self.db_dir = db_dir
+    #     self.db_content = db_content
+    #     self.nlp = stanza.Pipeline('en', processors='tokenize,pos,lemma')#, use_gpu=False)
+    #     self.stopwords = stopwords.words("english")
+
+    def __init__(self, *args, **kwargs):
+        super(Preprocessor_Wikisql, self).__init__(*args, **kwargs)
+
+        self.sqlite_conn = None
+    
+    def __del__(self):
+        sqlite_conn = getattr(self, 'sqlite_conn')
+        if sqlite_conn is not None:
+            print('Closing sqlite connection.')
+            sqlite_conn.close()
+
+    def pipeline(self, entry: dict, db: dict, verbose: bool = False):
+        """ db should be preprocessed """
+        
+        # YS: making up missing fields
+        entry['question_toks'] = entry['question'].split()
+        # end missing fields
+        
+        entry = self.preprocess_question(entry, db, verbose=verbose)
+        entry = self.schema_linking(entry, db, verbose=verbose)
+        entry = self.extract_subgraph(entry, db, verbose=verbose)
+        return entry
+
+    # def preprocess_database(self, db: dict, verbose: bool = False):
+    #     """ Tokenize, lemmatize, lowercase table and column names for each database """
+    #     ...
+
+    # def preprocess_question(self, entry: dict, db: dict, verbose: bool = False):
+    #     """ Tokenize, lemmatize, lowercase question"""
+    #     ...
+
+    # def extract_subgraph(self, entry: dict, db: dict, verbose: bool = False):
+    #     sql = entry['sql']
+    #     used_schema = {'table': set(), 'column': set()}
+    #     used_schema = self.extract_subgraph_from_sql(sql, used_schema)
+    #     entry['used_tables'] = sorted(list(used_schema['table']))
+    #     entry['used_columns'] = sorted(list(used_schema['column']))
+
+    #     if verbose:
+    #         print('Used tables:', entry['used_tables'])
+    #         print('Used columns:', entry['used_columns'], '\n')
+    #     return entry
+
+    def extract_subgraph_from_sql(self, sql: dict, used_schema: dict):
+        # YS: according to my observation, wikisql is always Select-From-Where, no join (since DB is single table)
+        # Only selects one column (in "sel"); may have multiple Where conditions. The "conds" format is [col_id, op_id, val]
+        # Example:     
+        # "sql": {
+        #   "sel": 0,
+        #   "conds": [
+        #       [ 3, 0, "Guard" ],
+        #       [ 4, 0, "1996-97" ],
+        #   ],
+        #   "agg": 0
+        # },
+
+        used_schema['table'].add(0)     # only a single table
+        used_schema['column'].add(sql['sel'])
+        for col_id, op_id, val in sql['conds']:
+            used_schema['column'].add(col_id)
+        return used_schema
+
+    def extract_subgraph_from_conds(self, conds: list, used_schema: dict):
+        # YS: Shouldn't be called...
+        raise NotImplementedError
+
+    def schema_linking(self, entry: dict, db: dict, verbose: bool = False):
+        """ Perform schema linking: both question and database need to be preprocessed """
+
+        raw_question_toks, question_toks = entry['raw_question_toks'], entry['processed_question_toks']
+        table_toks, column_toks = db['processed_table_toks'], db['processed_column_toks']
+        table_names, column_names = db['processed_table_names'], db['processed_column_names']
+        q_num, t_num, c_num, dtype = len(question_toks), len(table_toks), len(column_toks), '<U100'
+
+        # relations between questions and tables, q_num*t_num and t_num*q_num
+        table_matched_pairs = {'partial': [], 'exact': []}
+        q_tab_mat = np.array([['question-table-nomatch'] * t_num for _ in range(q_num)], dtype=dtype)
+        tab_q_mat = np.array([['table-question-nomatch'] * q_num for _ in range(t_num)], dtype=dtype)
+        max_len = max([len(t) for t in table_toks])
+        index_pairs = list(filter(lambda x: x[1] - x[0] <= max_len, combinations(range(q_num + 1), 2)))
+        index_pairs = sorted(index_pairs, key=lambda x: x[1] - x[0])
+        for i, j in index_pairs:
+            phrase = ' '.join(question_toks[i: j])
+            if phrase in self.stopwords: continue
+            for idx, name in enumerate(table_names):
+                if phrase == name: # fully match will overwrite partial match due to sort
+                    q_tab_mat[range(i, j), idx] = 'question-table-exactmatch'
+                    tab_q_mat[idx, range(i, j)] = 'table-question-exactmatch'
+                    if verbose:
+                        table_matched_pairs['exact'].append(str((name, idx, phrase, i, j)))
+                elif (j - i == 1 and phrase in name.split()) or (j - i > 1 and phrase in name):
+                    q_tab_mat[range(i, j), idx] = 'question-table-partialmatch'
+                    tab_q_mat[idx, range(i, j)] = 'table-question-partialmatch'
+                    if verbose:
+                        table_matched_pairs['partial'].append(str((name, idx, phrase, i, j)))
+
+        # relations between questions and columns
+        column_matched_pairs = {'partial': [], 'exact': [], 'value': []}
+        q_col_mat = np.array([['question-column-nomatch'] * c_num for _ in range(q_num)], dtype=dtype)
+        col_q_mat = np.array([['column-question-nomatch'] * q_num for _ in range(c_num)], dtype=dtype)
+        max_len = max([len(c) for c in column_toks])
+        index_pairs = list(filter(lambda x: x[1] - x[0] <= max_len, combinations(range(q_num + 1), 2)))
+        index_pairs = sorted(index_pairs, key=lambda x: x[1] - x[0])
+        for i, j in index_pairs:
+            phrase = ' '.join(question_toks[i: j])
+            if phrase in self.stopwords: continue
+            for idx, name in enumerate(column_names):
+                if phrase == name: # fully match will overwrite partial match due to sort
+                    q_col_mat[range(i, j), idx] = 'question-column-exactmatch'
+                    col_q_mat[idx, range(i, j)] = 'column-question-exactmatch'
+                    if verbose:
+                        column_matched_pairs['exact'].append(str((name, idx, phrase, i, j)))
+                elif (j - i == 1 and phrase in name.split()) or (j - i > 1 and phrase in name):
+                    q_col_mat[range(i, j), idx] = 'question-column-partialmatch'
+                    col_q_mat[idx, range(i, j)] = 'column-question-partialmatch'
+                    if verbose:
+                        column_matched_pairs['partial'].append(str((name, idx, phrase, i, j)))
+        if self.db_content:
+            # db_file = os.path.join(self.db_dir, db['db_id'], db['db_id'] + '.sqlite')
+            # YS add
+            if self.sqlite_conn is not None:
+                conn = self.sqlite_conn
+            else:
+                if not os.path.exists(self.db_dir):
+                    raise ValueError('[ERROR]: database file %s not found ...' % (self.db_dir))
+                conn = sqlite3.connect(self.db_dir)
+                conn.text_factory = lambda b: b.decode(errors='ignore')
+                self.sqlite_conn = conn
+
+            conn.execute('pragma foreign_keys=ON')
+            # for i, (tab_id, col_name) in enumerate(db['column_names_original']):
+            for i in range(len(db['column_names_original'])):
+                # YS: in wikisql, anything can be queried, so not skipping 'id'
+                # if i == 0 or 'id' in column_toks[i]: # ignore * and special token 'id'
+                #     continue
+                # tab_name = db['table_names_original'][tab_id]
+                try:
+                    # YS: in wikisql DB, table names need to be transformed; column names are col0, col1, ...
+                    sqlite_table_name = _wikisql_db_id_to_table_name(db['db_id'])
+                    sqlite_column_name = f'col{i}'
+                    cursor = conn.execute("SELECT DISTINCT \"%s\" FROM \"%s\";" % (sqlite_column_name, sqlite_table_name))
+                    cell_values = cursor.fetchall()
+                    cell_values = [str(each[0]) for each in cell_values]
+                    cell_values = [[str(float(each))] if is_number(each) else each.lower().split() for each in cell_values]
+                except Exception as e:
+                    print(e)
+                for j, word in enumerate(raw_question_toks):
+                    word = str(float(word)) if is_number(word) else word
+                    for c in cell_values:
+                        if word in c and 'nomatch' in q_col_mat[j, i] and word not in self.stopwords:
+                            q_col_mat[j, i] = 'question-column-valuematch'
+                            col_q_mat[i, j] = 'column-question-valuematch'
+                            if verbose:
+                                column_matched_pairs['value'].append(str((column_names[i], i, word, j, j + 1)))
+                            break
 
         # two symmetric schema linking matrix: q_num x (t_num + c_num), (t_num + c_num) x q_num
         q_col_mat[:, 0] = 'question-*-generic'

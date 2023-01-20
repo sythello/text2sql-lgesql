@@ -20,6 +20,6 @@ class Text2SQLEncoder(nn.Module):
         self.output_layer = Registrable.by_name(args.output_model)(args)
 
     def forward(self, batch):
-        outputs = self.input_layer(batch)
-        outputs = self.hidden_layer(outputs, batch)
+        outputs = self.input_layer(batch)           # (batch_all_words, rnn_hidden_dim)
+        outputs = self.hidden_layer(outputs, batch) # (batch_all_words, rnn_hidden_dim)
         return self.output_layer(outputs, batch)

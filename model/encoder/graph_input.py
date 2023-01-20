@@ -85,7 +85,7 @@ class SubwordAggregation(nn.Module):
         columns: bsize x max_column_word_len x hidden_size
         """
         # inputs: (bsize, all_subwords_len, hidden_size); (20, 87, 1024)
-        pdb.set_trace()    # YS inspect
+        # pdb.set_trace()    # YS inspect
         # old_questions: (batch_q_subwords * hidden_size); (274432 = 268 * 1024)
         old_questions, old_tables, old_columns = inputs.masked_select(batch.question_mask_plm.unsqueeze(-1)), \
             inputs.masked_select(batch.table_mask_plm.unsqueeze(-1)), inputs.masked_select(batch.column_mask_plm.unsqueeze(-1))
@@ -135,7 +135,11 @@ class InputRNNLayer(nn.Module):
             for schema phrase, extract representation for each phrase by concatenating head+tail vectors,
             batch.question_lens, batch.table_word_lens, batch.column_word_lens are used
         """
+        # input_dict['question']: (bsize, q_words_len, plm_hidden_size); (20, 19, 1024)
+        # pdb.set_trace()    # YS inspect
+        # questions: (bsize, q_words_len, rnn_hidden_size); (20, 19, 512)
         questions, _ = rnn_wrapper(self.question_lstm, input_dict['question'], batch.question_lens, cell=self.cell)
+        # questions: (batch_q_words, rnn_hidden_size); (266, 512)  The indexing selects only the valid words
         questions = questions.contiguous().view(-1, self.hidden_size)[lens2mask(batch.question_lens).contiguous().view(-1)]
         table_outputs, table_hiddens = rnn_wrapper(self.schema_lstm, input_dict['table'], batch.table_word_lens, cell=self.cell)
         if self.schema_aggregation != 'head+tail':
@@ -150,11 +154,13 @@ class InputRNNLayer(nn.Module):
             column_hiddens = column_hiddens[0].transpose(0, 1) if self.cell == 'LSTM' else column_hiddens.transpose(0, 1)
             columns = column_hiddens.contiguous().view(-1, self.hidden_size)
 
+        # questions: Tuple(bsize, (q_words_len, rnn_hidden_size))
         questions = questions.split(batch.question_lens.tolist(), dim=0)
         tables = tables.split(batch.table_lens.tolist(), dim=0)
         columns = columns.split(batch.column_lens.tolist(), dim=0)
-        # dgl graph node feats format: q11 q12 ... t11 t12 ... c11 c12 ... q21 q22 ...
+        # Original Annotation: dgl graph node feats format: q11 q12 ... t11 t12 ... c11 c12 ... q21 q22 ...
         outputs = [th for q_t_c in zip(questions, tables, columns) for th in q_t_c]
+        # outputs: (batch_all_words, rnn_hidden_size); (786, 512)
         outputs = torch.cat(outputs, dim=0)
         # transformer input format: bsize x max([q1 q2 ... t1 t2 ... c1 c2 ...]) x hidden_size
         # outputs = []

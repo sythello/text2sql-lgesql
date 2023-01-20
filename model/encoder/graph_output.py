@@ -61,7 +61,11 @@ class GraphOutputLayer(nn.Module):
                 inputs: sum(q_len + t_len + c_len) x hidden_size
                 outputs: bsize x (max_q_len + max_t_len + max_c_len) x hidden_size
         """
+        # inputs: (batch_all_words, rnn_hidden_size); (768, 512)
+        # batch.mask: (bsize, max_q_len + max_t_len + max_c_len); (20, 45)  Showing the pos of all valid words (for q+t+c, so not continuous)
+        # outputs: (bsize, max_q_len + max_t_len + max_c_len, rnn_hidden_size)
         outputs = inputs.new_zeros(len(batch), batch.mask.size(1), self.hidden_size)
+        # outputs: (bsize, max_q_len + max_t_len + max_c_len, rnn_hidden_size)
         outputs = outputs.masked_scatter_(batch.mask.unsqueeze(-1), inputs)
         if self.training:
             return outputs, batch.mask, torch.tensor(0., dtype=torch.float).to(outputs.device)

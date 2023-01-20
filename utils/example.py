@@ -118,7 +118,12 @@ class Example():
         self.graph = Example.graph_factory.graph_construction(ex, db)
 
         # outputs
-        self.query = ' '.join(ex['query'].split('\t'))
+        if 'query' in ex:
+            # spider
+            self.query = ' '.join(ex['query'].split('\t'))
+        else:
+            # wikisql
+            self.query = None
         self.ast = ex['ast']
         self.tgt_action = ex['actions']
         self.used_tables, self.used_columns = ex['used_tables'], ex['used_columns']

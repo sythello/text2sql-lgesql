@@ -4,7 +4,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from asdl.asdl import ASDLGrammar
 from asdl.transition_system import TransitionSystem
 from asdl.action_info import get_action_infos
-from preprocess.common_utils import Preprocessor
+from preprocess.common_utils import Preprocessor, Preprocessor_Wikisql
 
 def process_example(processor, entry, db, trans, verbose=False):
     # preprocess raw tokens, schema linking and subgraph extraction
@@ -33,6 +33,9 @@ def process_dataset(processor, dataset, tables, output_path=None, skip_large=Fal
     trans = TransitionSystem.get_class_by_lang('sql')(grammar)
     processed_dataset = []
     for idx, entry in enumerate(dataset):
+        if 'db_id' not in entry:
+            # YS: in wikisql, the key name is 'table_id'
+            entry['db_id'] = entry['table_id']
         if skip_large and len(tables[entry['db_id']]['column_names']) > 100: continue
         if verbose:
             print('*************** Processing %d-th sample **************' % (idx))
@@ -54,9 +57,15 @@ if __name__ == '__main__':
     arg_parser.add_argument('--output_path', type=str, required=True, help='output preprocessed dataset')
     arg_parser.add_argument('--skip_large', action='store_true', help='whether skip large databases')
     arg_parser.add_argument('--verbose', action='store_true', help='whether print processing information')
+    # YS add
+    arg_parser.add_argument('--dataset_name', type=str, choices=['spider', 'wikisql'], default='spider', help='which dataset to use')
     args = arg_parser.parse_args()
 
-    processor = Preprocessor(db_dir=args.db_dir, db_content=True)
+    if args.dataset_name == 'spider':
+        processor = Preprocessor(db_dir=args.db_dir, db_content=True)
+    elif args.dataset_name == 'wikisql':
+        processor = Preprocessor_Wikisql(db_dir=args.db_dir, db_content=True)
+
     # loading database and dataset
     if args.raw_table_path:
         # need to preprocess database items

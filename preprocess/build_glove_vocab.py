@@ -32,7 +32,8 @@ def construct_vocab_from_dataset(*data_paths, table_path='data/tables.bin', mwf=
             if c >= mwf:
                 oov_but_freq_words.append((w, c))
     print('Out of glove vocabulary size: %d\nAmong them, %d words occur equal or more than %d times in training dataset.' % (len(oov_words), len(oov_but_freq_words), mwf))
-    with open(output_path, 'w') as of:
+    # YS: add encoding='utf-8' here
+    with open(output_path, 'w', encoding='utf-8') as of:
         # first serialize oov but frequent words, allowing fine-tune them during training
         for w, c in oov_but_freq_words:
             of.write(w + sep + str(c) + '\n')
